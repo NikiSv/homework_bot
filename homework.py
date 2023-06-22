@@ -4,9 +4,10 @@ import sys
 import time
 
 import requests
-import telegram
 from dotenv import load_dotenv
+from unittest import TestCase, mock, main as uni_main
 
+import telegram
 from exceptions import ApiRequestError
 
 load_dotenv()
@@ -69,6 +70,8 @@ def get_api_answer(current_timestamp):
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=params)
     except requests.RequestException():
+        message = 'Что что-то пошло не так при выполнении запроса :('
+        log_and_send_message(message)
         raise ApiRequestError()
     if response.status_code != 200:
         message = f'Ошибка при запросе к API: {response.status_code}'
@@ -85,12 +88,11 @@ def check_response(response):
         message = 'Получен список вместо ожидаемого словаря'
         log_and_send_message(message)
         raise TypeError()
-    homeworks = response.get('homeworks')
     if not isinstance(response.get('homeworks'), list):
         message = 'Список homeworks отсутствует в ответе'
         log_and_send_message(message)
         raise TypeError()
-    if not homeworks:
+    if not response.get('homeworks'):
         logging.warning('Список homeworks пуст')
     return response.get("homeworks")
 
@@ -102,15 +104,10 @@ def parse_status(homework):
         log_and_send_message(message)
         raise KeyError()
 
-    homework_name = homework['homework_name']
-    try:
-        homework_status = homework['status']
-    except KeyError:
-        message = f'Для работы "{homework_name}" не указан статус проверки.'
-        log_and_send_message(message)
-        raise ValueError()
-
+    homework_name = homework.get('homework_name')
+    homework_status = homework.get('status')
     verdict = HOMEWORK_VERDICTS.get(homework_status)
+
     if verdict is None:
         message = f'Статус проверки для работы "{homework_name}" неизвестен:'
         f'{homework_status}.'
@@ -142,4 +139,48 @@ def main():
 
 
 if __name__ == '__main__':
+    ReqEx = requests.RequestException
+    resp = mock.Mock()
+
     main()
+
+    class TestReq(TestCase):
+        """Тестирование работы сервера."""
+
+        @mock.patch('requests.get')
+        def test_network_error(self, rq_get):
+            """Проверка сбоя сети."""
+            rq_get.side_effect = resp(side_effect=ReqEx('testing'))
+            main()
+
+        @mock.patch('requests.get')
+        def test_server_error(self, rq_get):
+            """Проверка отказа сервера."""
+            JSON = {'error': 'testing'}
+            resp.json = resp(return_value=JSON)
+            rq_get.return_value = resp
+            main()
+
+        @mock.patch('requests.get')
+        def test_unexpected_status_code(self, rq_get):
+            """Проверка неожиданного статуса ответа."""
+            resp.status_code = 333
+            rq_get.return_value = resp.status_code
+            main()
+
+        @mock.patch('requests.get')
+        def test_unexpected_homework_status(self, rq_get):
+            """Проверка неожиданного статуса домашки."""
+            JSON = {'homeworks': [{'homework_name': 'test', 'status': 'test'}]}
+            resp.json = resp(return_value=JSON)
+            rq_get.return_value = resp
+            main()
+
+        @mock.patch('requests.get')
+        def test_invalid_json(self, rq_get):
+            """Проверка некорректного json."""
+            JSON = {'homeworks': 1}
+            resp.json = resp(return_value=JSON)
+            rq_get.return_value = resp
+            main()
+    uni_main()
